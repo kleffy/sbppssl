@@ -1,17 +1,5 @@
-import os
-import sys
-# Insert parent directory so soc_enmap can be found
-current_dir = os.path.dirname(os.path.abspath(__file__))
-parent_dir = os.path.dirname(current_dir)
-if parent_dir not in sys.path:
-    sys.path.insert(0, parent_dir)
-
-"""
-model factory for soc estimation pipeline
-"""
-
 import torch.nn as nn
-from soc_enmap import SOCEnMAPModel, SOCEnMAPSSLModel
+from .soc_enmap import SOCEnMAPModel, SOCEnMAPSSLModel
 
 MODEL_REGISTRY = {
     'socenmap': {
@@ -36,5 +24,4 @@ def create_model(model_name, is_ssl=False, **kwargs):
     model_class = model_dict[model_type]
     return model_class(**kwargs)
 
-# Note: Removed the __main__ block.
-# Please use a dedicated driver script (outside of __init__.py) to test model creation.
+# Note: The __main__ block was removed. Use the dedicated driver script for testing.

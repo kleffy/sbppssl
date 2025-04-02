@@ -26,13 +26,15 @@ class EnMAPDataModule:
         self.bands = config.get('bands', None)
         self.val_size = config.get('val_size', 0.2)
         self.seed = config.get('seed', 42)
+        self.max_patches_per_image = config.get('max_patches_per_image', 100)
     
     def get_pretraining_loader(self):
         dataset = EnMAPDataset(
             data_dir=self.unlabeled_data_dir,
             mode='train',
             patch_size=self.patch_size,
-            bands=self.bands
+            bands=self.bands,
+            max_patches_per_image=self.max_patches_per_image,
         )
         
         # Split into train and validation

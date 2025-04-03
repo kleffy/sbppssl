@@ -28,3 +28,12 @@ c_logs/
 database/
 config/
 experiments*/
+models/soc_enmap copy.py
+models/socm.py
+models/hyperkon.py
+visualizer copy.py
+improved_visualizer.py
+visualizer_integration.py
+.gitignore
+viz.py
+visualizer.py

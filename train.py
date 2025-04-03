@@ -9,7 +9,6 @@ import random
 from datetime import datetime
 
 from models import create_model
-from models.soc_enmap import create_soc_model
 from data.data import EnMAPDataModule
 from trainers.trainers import PretrainingTrainer, FinetuningTrainer
 
@@ -97,7 +96,7 @@ def main():
         logging.info("Starting fine-tuning phase")
         
         # Create base model first
-        base_model = create_model(
+        soc_model = create_model(
             model_name,
             is_ssl=False,
             bands=config.get('in_channels', 224),
@@ -109,8 +108,33 @@ def main():
         # Get pretrained path
         pretrained_path = config.get('pretrained_model_path', None)
         
-        # Create SOC model using the base model and pretrained weights
-        soc_model = create_soc_model(pretrained_path, base_model, config, device, logging)
+        if pretrained_path and os.path.exists(pretrained_path):
+            logging.info(f"Loading pretrained weights from {pretrained_path}")
+            checkpoint = torch.load(pretrained_path, map_location=device)
+            
+            # Create a temporary instance of the SSL model to get encoder weights
+            temp_ssl_model = create_model(
+                model_name, 
+                is_ssl=True,
+                bands=config.get('in_channels', 224),
+                spectral_embed_dim=config.get('spectral_embed_dim', 64),
+                spatial_channels=config.get('spatial_channels', 64),
+                num_heads=config.get('num_heads', 4),
+                num_segments=config.get('num_segments', 8)
+            ).to(device)
+            
+            # Load the full SSL model weights
+            temp_ssl_model.load_state_dict(checkpoint['model_state_dict'])
+            
+            # Use get_encoder_state_dict() to extract just the encoder weights
+            encoder_state_dict = temp_ssl_model.get_encoder_state_dict()
+            
+            # Load these weights into the fine-tuning model
+            soc_model.load_state_dict(encoder_state_dict, strict=False)
+            
+            logging.info("Pretrained encoder weights loaded successfully")
+        else:
+            logging.warning("No pretrained weights found, starting fine-tuning from scratch")
         
         # Setup fine-tuning
         finetuning_trainer = FinetuningTrainer(soc_model, config, device)

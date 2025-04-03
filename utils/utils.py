@@ -1,6 +1,6 @@
 import torch
 import numpy as np
-
+import math
 
 class CurriculumScheduler:
     """
@@ -64,7 +64,7 @@ def apply_spectral_spatial_mask(x, mask_ratio=0.6, block_size=8):
 def segment_and_permute_spectra(x, num_segments=8, return_targets=True):
     """
     Segment and permute the spectral dimension of the input tensor with improved handling
-    of uneven divisions.
+    of uneven divisions. Generates both sequence-based and index-based permutation targets.
     
     Args:
         x: Tensor of shape [B, C, H, W] where C is the spectral dimension
@@ -81,12 +81,9 @@ def segment_and_permute_spectra(x, num_segments=8, return_targets=True):
     base_segment_length = C // num_segments
     remainder = C % num_segments
     
-    # Debugging info
-    # logging.debug(f"Segmenting spectra with {num_segments} segments, {C} bands")
-    # logging.debug(f"Base segment length: {base_segment_length}, remainder: {remainder}")
-    
     # Create permutation for each batch item
     permutation_targets = []
+    permutation_indices = []  # New: store single indices for each permutation
     permuted_x = torch.zeros_like(x)
     
     for b in range(B):
@@ -110,19 +107,40 @@ def segment_and_permute_spectra(x, num_segments=8, return_targets=True):
             # Copy to new position
             permuted_x[b, cur_idx:cur_idx+seg_length, :, :] = x[b, orig_start:orig_end, :, :]
             cur_idx += seg_length
-            
+        
         if return_targets:
             # Calculate inverse permutation (to go from shuffled to original)
             inverse_permutation = torch.zeros_like(permutation)
             for i, p in enumerate(permutation):
                 inverse_permutation[p] = i
-                
+            
             permutation_targets.append(inverse_permutation)
+            
+            # New: Convert permutation to a single index using Factorial Number System
+            perm_seq = permutation.tolist()
+            
+            # Step 1: Compute Lehmer code
+            lehmer = []
+            elements = list(range(num_segments))
+            for i, val in enumerate(perm_seq):
+                idx = elements.index(val)
+                lehmer.append(idx)
+                elements.pop(idx)
+            
+            # Step 2: Convert Lehmer code to a single index
+            index = 0
+            for i, val in enumerate(lehmer):
+                index += val * math.factorial(num_segments - 1 - i)
+            
+            permutation_indices.append(index)
     
     if return_targets:
         targets = {
             'permutation': torch.stack(permutation_targets),
-            'inverse_permutation': torch.stack(permutation_targets)
+            # Use the sequence-based inverse permutation (for compatibility/debugging)
+            'inverse_permutation_seq': torch.stack(permutation_targets),
+            # New: Add the single-index version (for cross_entropy loss)
+            'inverse_permutation': torch.tensor(permutation_indices, device=x.device, dtype=torch.long)
         }
         return permuted_x, targets
     

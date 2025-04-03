@@ -38,22 +38,10 @@ class PermutationLoss(nn.Module):
     def forward(self, predictions, targets):
         """
         Args:
-            predictions: Tensor of shape [B, num_segments, num_segments] containing logits
-            targets: Tensor of shape [B, num_segments] containing indices
+            predictions: Tensor of shape [B, factorial(num_segments)] containing logits
+            targets: Tensor of shape [B] containing permutation indices
         """
-        B, num_segments, _ = predictions.shape
-        loss = 0
-        
-        # For each position, compute cross entropy loss - only loop through actual segments
-        for i in range(num_segments):
-            position_preds = predictions[:, i, :]
-            position_targets = targets[:, i]
-            loss += F.cross_entropy(position_preds, position_targets)
-        
-        # Average across positions
-        loss = loss / num_segments
-        
-        return loss
+        return F.cross_entropy(predictions, targets)
 
 
 class CombinedSSLLoss(nn.Module):

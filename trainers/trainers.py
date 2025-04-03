@@ -10,10 +10,13 @@ import matplotlib.pyplot as plt
 
 from utils.utils import apply_spectral_spatial_mask, segment_and_permute_spectra, calculate_metrics, get_curriculum_segments
 from utils.losses import CombinedSSLLoss, SOCRegressionLoss
-from visualizer import create_visualization_dir, add_embedding_extraction_to_model
-from visualizer_integration import visualize_reconstruction, visualize_permutation, visualize_embeddings, visualize_metrics
-        
-            
+from viz import (
+    save_reconstruction_visualization,
+    save_permutation_confusion_matrix,
+    save_spectral_signature_comparison
+)
+
+      
 try:
     import wandb
     WANDB_AVAILABLE = True
@@ -184,7 +187,7 @@ class PretrainingTrainer(BaseTrainer):
         self.max_segments = config.get('max_segments', 8)
         
         # Add embedding extraction to model
-        self.model = add_embedding_extraction_to_model(self.model)
+        # self.model = add_embedding_extraction_to_model(self.model)
         
         # Metrics history for visualizations
         self.metrics_history = {
@@ -214,9 +217,7 @@ class PretrainingTrainer(BaseTrainer):
         """
         train_loader = data_loaders['train']
         val_loader = data_loaders['val']
-        
-        # Create visualization directory
-        vis_dir = create_visualization_dir(self.output_dir)
+
         
         # Attempt to load the latest checkpoint if available
         self.check_for_checkpoint()
@@ -285,9 +286,6 @@ class PretrainingTrainer(BaseTrainer):
                     logging.info(f"  Val Rec Loss: {val_metrics['rec_loss']:.4f}, "
                                 f"Val Perm Loss: {val_metrics['perm_loss']:.4f}")
                 
-                # Generate visualizations if it's time
-                if (epoch + 1) % self.visualization_frequency == 0:
-                    self._generate_visualizations(train_loader, val_loader, epoch)
                 
                 # Check for improvement
                 if val_loss < self.best_val_loss:
@@ -325,8 +323,6 @@ class PretrainingTrainer(BaseTrainer):
             epoch_time = time.time() - epoch_start_time
             logging.info(f"Epoch {epoch+1}/{self.max_epochs} completed in {epoch_time:.2f}s")
         
-        # Create final visualization
-        self._generate_visualizations(train_loader, val_loader, self.current_epoch, final=True)
         
         logging.info(f"Training completed after {self.current_epoch+1} epochs")
         logging.info(f"Best validation loss: {self.best_val_loss:.6f}")
@@ -409,18 +405,14 @@ class PretrainingTrainer(BaseTrainer):
                 perm_targets_tensor = perm_targets['inverse_permutation']
                 
                 # Get predicted indices
-                pred_indices = torch.argmax(perm_preds, dim=2)  # [B, num_segments]
+                pred_indices = torch.argmax(perm_preds, dim=1)  # [B]
                 
                 # Calculate accuracy
                 correct = (pred_indices == perm_targets_tensor).float()
                 perm_acc = torch.mean(correct).item()
                 
-                # Calculate perfect match accuracy (all segments correct)
-                perfect_match = torch.all(correct, dim=1).float().mean().item()
-                
                 # Add to batch metrics
                 batch_metrics['perm_acc'] = perm_acc
-                batch_metrics['perfect_match'] = perfect_match
             
             # Update metrics
             num_batches += 1
@@ -512,18 +504,14 @@ class PretrainingTrainer(BaseTrainer):
                     perm_targets_tensor = perm_targets['inverse_permutation']
                     
                     # Get predicted indices
-                    pred_indices = torch.argmax(perm_preds, dim=2)  # [B, num_segments]
+                    pred_indices = torch.argmax(perm_preds, dim=1)  # [B]
                     
                     # Calculate accuracy
                     correct = (pred_indices == perm_targets_tensor).float()
                     perm_acc = torch.mean(correct).item()
                     
-                    # Calculate perfect match accuracy (all segments correct)
-                    perfect_match = torch.all(correct, dim=1).float().mean().item()
-                    
                     # Add to batch metrics
                     batch_metrics['perm_acc'] = perm_acc
-                    batch_metrics['perfect_match'] = perfect_match
                     
                     # Calculate additional permutation metrics using our custom functions
                     try:
@@ -580,75 +568,44 @@ class PretrainingTrainer(BaseTrainer):
         # Store visualization samples for later use
         self.vis_samples = vis_samples
         
-        return metrics
-        
-    
-    def _generate_visualizations(self, train_loader, val_loader, epoch, final=False):
-        """Generate visualizations for current training state."""
-        logging.info(f"Generating visualizations for epoch {epoch+1}")
-        
-        # Use the stored samples from validation
-        if hasattr(self, 'vis_samples'):
-            vis_samples = self.vis_samples
-            
+        if (epoch + 1) % self.visualization_frequency == 0:
             # Reconstruction visualization
-            if self.use_reconstruction and all(x is not None for x in [vis_samples.get('original'), 
-                                                                    vis_samples.get('masked'), 
-                                                                    vis_samples.get('reconstructed')]):
-                try:
-                    visualize_reconstruction(
-                        vis_samples['original'], 
-                        vis_samples['masked'], 
-                        vis_samples['reconstructed'],
-                        epoch,
-                        self.output_dir
-                    )
-                except Exception as e:
-                    logging.error(f"Error generating reconstruction visualizations: {e}")
-            
-            # Permutation visualization
-            if self.use_permutation and all(x is not None for x in [vis_samples.get('original'), 
-                                                                vis_samples.get('shuffled'), 
-                                                                vis_samples.get('perm_preds'),
-                                                                vis_samples.get('perm_targets')]):
-                try:
-                    visualize_permutation(
-                        vis_samples['original'],
-                        vis_samples['shuffled'],
-                        vis_samples['perm_preds'],
-                        vis_samples['perm_targets'],
-                        epoch,
-                        self.output_dir
-                    )
-                except Exception as e:
-                    logging.error(f"Error generating permutation visualizations: {e}")
-        
-        # Generate embedding visualizations
-        if final or (epoch + 1) % (self.visualization_frequency * 2) == 0:  # Less frequent for embeddings
-            try:
-                visualize_embeddings(
-                    self.model,
-                    val_loader,
-                    self.device,
-                    epoch,
-                    self.output_dir
+            if self.use_reconstruction and 'reconstructed' in self.vis_samples:
+                save_reconstruction_visualization(
+                    self.vis_samples['original'],
+                    self.vis_samples['masked'],
+                    self.vis_samples['reconstructed'],
+                    self.output_dir,
+                    epoch=epoch+1
                 )
-            except Exception as e:
-                logging.error(f"Error generating embedding visualizations: {e}")
-        
-        # Generate metrics visualizations
-        try:
-            visualize_metrics(
-                self.metrics_history,
-                epoch,
-                self.output_dir,
-                is_final=final
-            )
-        except Exception as e:
-            logging.error(f"Error generating metrics visualizations: {e}")
-        
-        logging.info(f"Visualizations generated for epoch {epoch+1}")
 
+            # Permutation confusion matrix visualization
+            if self.use_permutation and 'perm_preds' in self.vis_samples:
+                from utils.metrics import calculate_permutation_metrics
+                perm_metrics = calculate_permutation_metrics(
+                    self.vis_samples['perm_preds'],
+                    self.vis_samples['perm_targets']
+                )
+                save_permutation_confusion_matrix(
+                    perm_metrics['confusion_matrix'],
+                    self.output_dir,
+                    epoch=epoch+1
+                )
+
+            # Spectral signature visualization
+            if all(k in self.vis_samples for k in ['original', 'shuffled', 'reconstructed', 'true_perm', 'pred_perm']):
+                save_spectral_signature_comparison(
+                    self.vis_samples['original'],
+                    self.vis_samples['shuffled'],
+                    self.vis_samples['reconstructed'],
+                    self.vis_samples['true_perm'],
+                    self.vis_samples['pred_perm'],
+                    self.output_dir,
+                    epoch=epoch+1
+                )
+        
+        return metrics
+    
 class FinetuningTrainer(BaseTrainer):
     def __init__(self, model, config, device):
         super().__init__(model, config, device)
@@ -725,7 +682,7 @@ class FinetuningTrainer(BaseTrainer):
         logging.info(f"Starting fine-tuning for {self.max_epochs} epochs")
         
         # Create visualization directory
-        vis_dir = create_visualization_dir(self.output_dir)
+        # vis_dir = create_visualization_dir(self.output_dir)
         
         # Resume from checkpoint if available
         resume_finetuning = self.config.get('resume_finetuning', False)

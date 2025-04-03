@@ -2,6 +2,8 @@ import torch
 import numpy as np
 from skimage.metrics import structural_similarity as ssim
 from skimage.metrics import peak_signal_noise_ratio as psnr
+import itertools
+import math
 
 
 def calculate_reconstruction_metrics(original, reconstructed, mask=None):
@@ -93,50 +95,86 @@ def calculate_reconstruction_metrics(original, reconstructed, mask=None):
 
 def calculate_permutation_metrics(predictions, targets):
     """
-    Calculate metrics for permutation prediction.
+    Calculate metrics for segment-wise permutation prediction.
     
     Args:
-        predictions: Permutation predictions [B, num_segments, num_segments]
-        targets: Permutation targets [B, num_segments]
+        predictions: Permutation predictions [B, factorial(num_segments)]
+        targets: Permutation target indices [B]
         
     Returns:
         Dictionary of metrics
     """
+    
     # Convert to CPU
     predictions = predictions.detach().cpu()
     targets = targets.detach().cpu()
     
-    # Get predicted indices
-    pred_indices = torch.argmax(predictions, dim=2)  # [B, num_segments]
+    # Get predicted permutation indices
+    pred_indices = torch.argmax(predictions, dim=1)  # [B]
     
-    # Calculate segment accuracy (per-position accuracy)
-    correct = (pred_indices == targets).float()
-    segment_accuracy = torch.mean(correct).item()
+    # Calculate top-level accuracy (exact permutation match)
+    permutation_accuracy = (pred_indices == targets).float().mean().item()
     
-    # Calculate permutation accuracy (exact match)
-    permutation_accuracy = torch.mean(torch.all(correct, dim=1).float()).item()
+    # Get batch size and infer number of segments from predictions shape
+    batch_size = predictions.shape[0]
+    num_permutations = predictions.shape[1]
     
-    # Calculate per-position accuracy
-    num_segments = targets.shape[1]
-    position_accuracies = []
+    # Calculate num_segments from factorial
+    # Solve for n where n! = num_permutations
+    num_segments = 1
+    while math.factorial(num_segments) < num_permutations:
+        num_segments += 1
     
-    for pos in range(num_segments):
-        pos_accuracy = torch.mean((pred_indices[:, pos] == targets[:, pos]).float()).item()
-        position_accuracies.append(pos_accuracy)
+    # Generate all possible permutations
+    all_permutations = list(itertools.permutations(range(num_segments)))
     
-    # Calculate confusion matrix
-    batch_size = targets.shape[0]
-    confusion_matrix = torch.zeros(num_segments, num_segments, dtype=torch.int)
+    # Convert permutation indices to actual permutations
+    segment_preds = []
+    segment_targets = []
     
     for i in range(batch_size):
-        for j in range(num_segments):
-            target_pos = targets[i, j].item()
-            pred_pos = pred_indices[i, j].item()
+        pred_perm_idx = pred_indices[i].item()
+        target_perm_idx = targets[i].item()
+        
+        if pred_perm_idx < len(all_permutations):
+            pred_perm = all_permutations[pred_perm_idx]
+            segment_preds.append(pred_perm)
+        else:
+            # Handle out-of-range indices
+            pred_perm = tuple(range(num_segments))
+            segment_preds.append(pred_perm)
+            
+        if target_perm_idx < len(all_permutations):
+            target_perm = all_permutations[target_perm_idx]
+            segment_targets.append(target_perm)
+        else:
+            # Handle out-of-range indices
+            target_perm = tuple(range(num_segments))
+            segment_targets.append(target_perm)
+    
+    # Calculate per-segment accuracy
+    segment_accuracies = []
+    for seg_idx in range(num_segments):
+        correct_count = 0
+        for i in range(batch_size):
+            if segment_preds[i][seg_idx] == segment_targets[i][seg_idx]:
+                correct_count += 1
+        segment_accuracies.append(correct_count / batch_size)
+    
+    # Calculate segment-wise accuracy (average across all segments)
+    segment_accuracy = sum(segment_accuracies) / len(segment_accuracies)
+    
+    # Create a confusion matrix for segment positions
+    confusion_matrix = torch.zeros(num_segments, num_segments, dtype=torch.int)
+    for i in range(batch_size):
+        for seg_idx in range(num_segments):
+            target_pos = segment_targets[i][seg_idx]
+            pred_pos = segment_preds[i][seg_idx]
             confusion_matrix[target_pos, pred_pos] += 1
     
     return {
-        'segment_accuracy': segment_accuracy,
-        'permutation_accuracy': permutation_accuracy,
-        'position_accuracies': position_accuracies,
-        'confusion_matrix': confusion_matrix
+        'permutation_accuracy': permutation_accuracy,  # Exact permutation match
+        'segment_accuracy': segment_accuracy,          # Average segment position accuracy
+        'segment_accuracies': segment_accuracies,      # Per-segment position accuracy
+        'confusion_matrix': confusion_matrix           # Position confusion matrix
     }

@@ -15,6 +15,8 @@ from rasterio.errors import NotGeoreferencedWarning
 
 warnings.filterwarnings('ignore', category=NotGeoreferencedWarning)
 
+logger = logging.getLogger(__name__)
+
 class EnMAPDataset(Dataset):
     """
     Base class for loading EnMAP hyperspectral data and creating patches.
@@ -78,7 +80,7 @@ class EnMAPDataset(Dataset):
         
         # Only log if verbose
         if self.verbose:
-            logging.info(f"Found {len(self.file_list)} EnMAP data files")
+            logger.info(f"Found {len(self.file_list)} EnMAP data files")
         
         # Load first file to get image metadata
         with rasterio.open(self.file_list[0]) as src:
@@ -92,7 +94,7 @@ class EnMAPDataset(Dataset):
         
         # Only log if verbose
         if self.verbose:
-            logging.info(f"Using {len(self.bands)} bands out of {self.num_bands}")
+            logger.info(f"Using {len(self.bands)} bands out of {self.num_bands}")
         
         # Initialize cache if needed
         self.data_cache = {} if self.cache_data else None
@@ -141,7 +143,7 @@ class EnMAPDataset(Dataset):
                     file_idx, file_path, mask_path, has_mask, height, width, mask))
         
         if self.verbose:
-            logging.info(f"Created {len(patches)} patches of size {self.patch_size} from {len(self.file_list)} files using '{self.sampling_strategy}' sampling")
+            logger.info(f"Created {len(patches)} patches of size {self.patch_size} from {len(self.file_list)} files using '{self.sampling_strategy}' sampling")
         return patches
     
     def _create_stride_patches(self, file_idx, file_path, mask_path, has_mask, height, width, mask) -> List[Dict]:
@@ -254,7 +256,7 @@ class EnMAPDataset(Dataset):
         
         # Only log if verbose
         if self.verbose:
-            logging.info(f"Split data: {np.sum(self.train_mask)} training patches, "
+            logger.info(f"Split data: {np.sum(self.train_mask)} training patches, "
                        f"{np.sum(self.val_mask)} validation patches, "
                        f"{np.sum(self.test_mask)} test patches")
     

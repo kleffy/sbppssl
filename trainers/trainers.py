@@ -10,13 +10,12 @@ import matplotlib.pyplot as plt
 
 from utils.utils import apply_spectral_spatial_mask, segment_and_permute_spectra, calculate_metrics, get_curriculum_segments
 from utils.losses import CombinedSSLLoss, SOCRegressionLoss
-from viz import (
-    save_reconstruction_visualization,
-    save_permutation_confusion_matrix,
-    save_spectral_signature_comparison
-)
+from viz import (save_reconstruction_visualization, save_permutation_confusion_matrix, 
+                 save_spectral_signature_comparison, visualize_finetuning_metrics,
+                 visualize_soc_predictions, visualize_soc_residuals)
 
-      
+logger = logging.getLogger(__name__)
+
 try:
     import wandb
     WANDB_AVAILABLE = True
@@ -71,7 +70,7 @@ class BaseTrainer:
             checkpoint_path = path
             
         torch.save(checkpoint, checkpoint_path)
-        logging.info(f"Checkpoint saved to {checkpoint_path}")
+        logger.info(f"Checkpoint saved to {checkpoint_path}")
         
         if is_best and self.save_best_model:
             best_path = self.checkpoint_dir / 'best_model.pth'
@@ -79,7 +78,7 @@ class BaseTrainer:
             
             # Update config with best model path
             self.config['pretrained_model_path'] = str(best_path)
-            logging.info(f"Best model saved to {best_path}")
+            logger.info(f"Best model saved to {best_path}")
     
     def save_final_config(self):
         """Save the final config (with pretrained_model_path updated) to the output dir only once."""
@@ -87,7 +86,7 @@ class BaseTrainer:
         config_file = self.output_dir / "config_used.yaml"
         with open(config_file, 'w') as f:
             yaml.dump(self.config, f, default_flow_style=False)
-        logging.info(f"Final configuration saved to {config_file}")
+        logger.info(f"Final configuration saved to {config_file}")
     
     def check_for_checkpoint(self):
         """Check if there's a checkpoint available and load it."""
@@ -96,11 +95,11 @@ class BaseTrainer:
         checkpoint_path = self.checkpoint_dir / f"{trainer_type}_latest.pth"
         
         if checkpoint_path.exists():
-            logging.info(f"Found checkpoint at {checkpoint_path}")
+            logger.info(f"Found checkpoint at {checkpoint_path}")
             self.resume_from_checkpoint(checkpoint_path)
             return True
         else:
-            logging.info(f"No checkpoint found at {checkpoint_path}, starting from scratch")
+            logger.info(f"No checkpoint found at {checkpoint_path}, starting from scratch")
             return False
         
     def resume_from_checkpoint(self, checkpoint_path: Union[str, Path]) -> None:
@@ -133,9 +132,9 @@ class BaseTrainer:
         self.best_val_loss = checkpoint.get('best_val_loss', float('inf'))
         self.best_val_metrics = checkpoint.get('best_val_metrics', None)
         
-        logging.info(f"Resumed training from checkpoint: {checkpoint_path}")
-        logging.info(f"Starting from epoch {self.current_epoch}, global step {self.global_step}")
-        logging.info(f"Best validation loss so far: {self.best_val_loss:.6f}")
+        logger.info(f"Resumed training from checkpoint: {checkpoint_path}")
+        logger.info(f"Starting from epoch {self.current_epoch}, global step {self.global_step}")
+        logger.info(f"Best validation loss so far: {self.best_val_loss:.6f}")
 
 class PretrainingTrainer(BaseTrainer):
     def __init__(self, model, config, device):
@@ -222,7 +221,7 @@ class PretrainingTrainer(BaseTrainer):
         # Attempt to load the latest checkpoint if available
         self.check_for_checkpoint()
         
-        logging.info(f"Starting pretraining from epoch {self.current_epoch+1} to {self.max_epochs}")
+        logger.info(f"Starting pretraining from epoch {self.current_epoch+1} to {self.max_epochs}")
         
         # Track whether curriculum scheduler has been initialized
         if not hasattr(self, 'curriculum_scheduler'):
@@ -243,7 +242,7 @@ class PretrainingTrainer(BaseTrainer):
             # Update curriculum difficulty if enabled
             if self.curriculum_scheduler is not None:
                 new_difficulty = self.curriculum_scheduler.step(epoch)
-                logging.info(f"Epoch {epoch+1}: Curriculum difficulty set to {new_difficulty:.2f}")
+                logger.info(f"Epoch {epoch+1}: Curriculum difficulty set to {new_difficulty:.2f}")
             
             epoch_start_time = time.time()
             
@@ -261,9 +260,9 @@ class PretrainingTrainer(BaseTrainer):
                 self.metrics_history['train_perm_acc'].append(train_metrics['perm_acc'])
             
             # Log epoch metrics
-            logging.info(f"Epoch {epoch+1}/{self.max_epochs} - Train Loss: {train_loss:.4f}")
+            logger.info(f"Epoch {epoch+1}/{self.max_epochs} - Train Loss: {train_loss:.4f}")
             if 'rec_loss' in train_metrics and 'perm_loss' in train_metrics:
-                logging.info(f"  Rec Loss: {train_metrics['rec_loss']:.4f}, "
+                logger.info(f"  Rec Loss: {train_metrics['rec_loss']:.4f}, "
                             f"Perm Loss: {train_metrics['perm_loss']:.4f}")
             
             # Evaluate on validation set
@@ -281,16 +280,16 @@ class PretrainingTrainer(BaseTrainer):
                     self.metrics_history['val_perm_acc'].append(val_metrics['perm_acc'])
                 
                 # Log validation metrics
-                logging.info(f"Validation Loss: {val_loss:.4f}")
+                logger.info(f"Validation Loss: {val_loss:.4f}")
                 if 'rec_loss' in val_metrics and 'perm_loss' in val_metrics:
-                    logging.info(f"  Val Rec Loss: {val_metrics['rec_loss']:.4f}, "
+                    logger.info(f"  Val Rec Loss: {val_metrics['rec_loss']:.4f}, "
                                 f"Val Perm Loss: {val_metrics['perm_loss']:.4f}")
                 
                 
                 # Check for improvement
                 if val_loss < self.best_val_loss:
                     improvement = (self.best_val_loss - val_loss) / self.best_val_loss * 100
-                    logging.info(f"Validation loss improved from {self.best_val_loss:.6f} to {val_loss:.6f} "
+                    logger.info(f"Validation loss improved from {self.best_val_loss:.6f} to {val_loss:.6f} "
                             f"({improvement:.2f}% improvement)")
                     
                     self.best_val_loss = val_loss
@@ -301,7 +300,7 @@ class PretrainingTrainer(BaseTrainer):
                         self._save_checkpoint(is_best=True)
                 else:
                     self.no_improvement_epochs += 1
-                    logging.info(f"No improvement in validation loss for {self.no_improvement_epochs} epochs")
+                    logger.info(f"No improvement in validation loss for {self.no_improvement_epochs} epochs")
                 
                 # Step scheduler if it's ReduceLROnPlateau
                 if self.scheduler is not None and isinstance(self.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
@@ -316,16 +315,16 @@ class PretrainingTrainer(BaseTrainer):
             
             # Early stopping
             if self.no_improvement_epochs >= self.early_stopping_patience:
-                logging.info(f"Early stopping after {self.no_improvement_epochs} epochs without improvement")
+                logger.info(f"Early stopping after {self.no_improvement_epochs} epochs without improvement")
                 break
             
             # Log epoch time
             epoch_time = time.time() - epoch_start_time
-            logging.info(f"Epoch {epoch+1}/{self.max_epochs} completed in {epoch_time:.2f}s")
+            logger.info(f"Epoch {epoch+1}/{self.max_epochs} completed in {epoch_time:.2f}s")
         
         
-        logging.info(f"Training completed after {self.current_epoch+1} epochs")
-        logging.info(f"Best validation loss: {self.best_val_loss:.6f}")
+        logger.info(f"Training completed after {self.current_epoch+1} epochs")
+        logger.info(f"Best validation loss: {self.best_val_loss:.6f}")
         
         # Cleanup WandB
         if hasattr(self, 'use_wandb_logging') and self.use_wandb_logging and 'wandb' in globals():
@@ -563,7 +562,7 @@ class PretrainingTrainer(BaseTrainer):
             # Log detailed metrics
             for k, v in metrics.items():
                 if k not in ['loss', 'rec_loss', 'perm_loss'] and isinstance(v, (int, float)):
-                    logging.info(f"Validation metric {k}: {v:.4f}")
+                    logger.info(f"Validation metric {k}: {v:.4f}")
         
         # Store visualization samples for later use
         self.vis_samples = vis_samples
@@ -605,7 +604,9 @@ class PretrainingTrainer(BaseTrainer):
                 )
         
         return metrics
-    
+
+
+
 class FinetuningTrainer(BaseTrainer):
     def __init__(self, model, config, device):
         super().__init__(model, config, device)
@@ -678,11 +679,11 @@ class FinetuningTrainer(BaseTrainer):
             'val_rpd': []
         }
         
-    def train(self, train_loader, val_loader):
-        logging.info(f"Starting fine-tuning for {self.max_epochs} epochs")
+        # Visualization frequency
+        self.visualization_frequency = config.get('visualization_frequency', 5)
         
-        # Create visualization directory
-        # vis_dir = create_visualization_dir(self.output_dir)
+    def train(self, train_loader, val_loader):
+        logger.info(f"Starting fine-tuning for {self.max_epochs} epochs")
         
         # Resume from checkpoint if available
         resume_finetuning = self.config.get('resume_finetuning', False)
@@ -698,7 +699,7 @@ class FinetuningTrainer(BaseTrainer):
             
             # Validation phase
             self.model.eval()
-            val_loss, val_metrics = self._validate(val_loader)
+            val_loss, val_metrics = self._validate(val_loader, epoch)
             
             # Store metrics for visualization
             self.metrics_history['train_loss'].append(train_loss)
@@ -715,18 +716,52 @@ class FinetuningTrainer(BaseTrainer):
                 self.metrics_history['val_rpd'].append(val_metrics.get('rpd', 0))
             
             # Log metrics
-            logging.info(f"Epoch {epoch+1}/{self.max_epochs} - "
+            logger.info(f"Epoch {epoch+1}/{self.max_epochs} - "
                         f"Train Loss: {train_loss:.4f}, "
                         f"Val Loss: {val_loss:.4f}")
             
             if val_metrics is not None:
-                logging.info(f"  Val RMSE: {val_metrics['rmse']:.4f}, "
+                logger.info(f"  Val RMSE: {val_metrics['rmse']:.4f}, "
                             f"Val R²: {val_metrics['r2']:.4f}, "
                             f"Val RPD: {val_metrics['rpd']:.4f}")
             
-            # Generate metrics visualization periodically
-            if (epoch + 1) % 5 == 0 or epoch == 0:
-                self._visualize_metrics(epoch)
+            # Generate metrics and SOC prediction visualizations periodically
+            if (epoch + 1) % self.visualization_frequency == 0 or epoch == 0:
+                # Import and use visualization functions from viz.py
+                
+                # Generate metrics visualizations
+                visualize_finetuning_metrics(
+                    metrics_history=self.metrics_history,
+                    output_dir=self.output_dir,
+                    epoch=epoch,
+                    is_final=False,
+                    show=False
+                )
+                
+                # Generate SOC prediction visualizations if validation data is available
+                if hasattr(self, 'val_predictions') and hasattr(self, 'val_targets'):
+                    vis_soc_dir = self.output_dir / 'visualizations' / 'fine_tuning' / 'soc_predictions'
+                    vis_soc_dir.mkdir(exist_ok=True, parents=True)
+                    
+                    # Predictions vs targets plot
+                    visualize_soc_predictions(
+                        predictions=self.val_predictions,
+                        targets=self.val_targets,
+                        save_path=vis_soc_dir / 'soc_predictions.png',
+                        title=f"SOC Prediction Performance",
+                        epoch=epoch+1,
+                        show=False
+                    )
+                    
+                    # Residuals plot
+                    visualize_soc_residuals(
+                        predictions=self.val_predictions,
+                        targets=self.val_targets,
+                        save_path=vis_soc_dir / 'soc_residuals.png',
+                        title=f"SOC Prediction Error Analysis",
+                        epoch=epoch+1,
+                        show=False
+                    )
             
             # Update scheduler
             if self.scheduler is not None:
@@ -742,7 +777,7 @@ class FinetuningTrainer(BaseTrainer):
             # Check for improvement
             if val_loss < self.best_val_loss:
                 improvement = (self.best_val_loss - val_loss) / self.best_val_loss * 100
-                logging.info(f"Validation loss improved from {self.best_val_loss:.6f} to {val_loss:.6f} "
+                logger.info(f"Validation loss improved from {self.best_val_loss:.6f} to {val_loss:.6f} "
                            f"({improvement:.2f}% improvement)")
                 
                 self.best_val_loss = val_loss
@@ -752,19 +787,49 @@ class FinetuningTrainer(BaseTrainer):
                 self._save_checkpoint(checkpoint_path, val_metrics, is_best=True)
             else:
                 self.no_improvement_epochs += 1
-                logging.info(f"No improvement in validation loss for {self.no_improvement_epochs} epochs")
+                logger.info(f"No improvement in validation loss for {self.no_improvement_epochs} epochs")
             
             # Early stopping
             if self.no_improvement_epochs >= self.early_stopping_patience:
-                logging.info(f"Early stopping after {epoch+1} epochs")
+                logger.info(f"Early stopping after {epoch+1} epochs")
                 break
             
             # Log epoch time
             epoch_time = time.time() - epoch_start_time
-            logging.info(f"Epoch completed in {epoch_time:.2f}s")
+            logger.info(f"Epoch completed in {epoch_time:.2f}s")
         
-        # Final visualization
-        self._visualize_metrics(epoch, is_final=True)
+        
+        # Generate final metrics visualization
+        visualize_finetuning_metrics(
+            metrics_history=self.metrics_history,
+            output_dir=self.output_dir,
+            epoch=epoch,
+            is_final=True,
+            show=False
+        )
+        
+        # Final SOC prediction visualization
+        if hasattr(self, 'val_predictions') and hasattr(self, 'val_targets'):
+            vis_soc_dir = self.output_dir / 'visualizations' / 'fine_tuning' / 'soc_predictions'
+            vis_soc_dir.mkdir(exist_ok=True, parents=True)
+            
+            # Final predictions vs targets plot
+            visualize_soc_predictions(
+                predictions=self.val_predictions,
+                targets=self.val_targets,
+                save_path=vis_soc_dir / 'soc_predictions_final.png',
+                title=f"Final SOC Prediction Performance",
+                show=False
+            )
+            
+            # Final residuals plot
+            visualize_soc_residuals(
+                predictions=self.val_predictions,
+                targets=self.val_targets,
+                save_path=vis_soc_dir / 'soc_residuals_final.png',
+                title=f"Final SOC Prediction Error Analysis",
+                show=False
+            )
         
         # Save final config
         self.save_final_config()
@@ -817,7 +882,7 @@ class FinetuningTrainer(BaseTrainer):
         
         return avg_loss, metrics
     
-    def _validate(self, val_loader):
+    def _validate(self, val_loader, epoch=None):
         total_loss = 0
         all_preds = []
         all_targets = []
@@ -854,68 +919,14 @@ class FinetuningTrainer(BaseTrainer):
         all_preds = torch.cat(all_preds)
         all_targets = torch.cat(all_targets)
         
+        # Store predictions and targets for visualization
+        self.val_predictions = all_preds
+        self.val_targets = all_targets
+        
         # Calculate metrics
         metrics = calculate_metrics(all_preds, all_targets)
         
-        return avg_loss, metrics
-    
-    def _visualize_metrics(self, epoch, is_final=False):
-        """
-        Visualize training and validation metrics.
+        return avg_loss, metrics       
         
-        Args:
-            epoch: Current epoch
-            is_final: Whether this is the final visualization
-        """
-        vis_dir = self.output_dir / 'visualizations' / 'fine_tuning'
-        vis_dir.mkdir(exist_ok=True, parents=True)
         
-        # Create figure with multiple subplots
-        fig, axes = plt.subplots(2, 2, figsize=(15, 10))
         
-        # Plot loss
-        axes[0, 0].plot(self.metrics_history['train_loss'], label='Train')
-        axes[0, 0].plot(self.metrics_history['val_loss'], label='Validation')
-        axes[0, 0].set_title('Loss')
-        axes[0, 0].set_xlabel('Epoch')
-        axes[0, 0].set_ylabel('Loss')
-        axes[0, 0].legend()
-        axes[0, 0].grid(True, alpha=0.3)
-        
-        # Plot RMSE
-        axes[0, 1].plot(self.metrics_history['train_rmse'], label='Train')
-        axes[0, 1].plot(self.metrics_history['val_rmse'], label='Validation')
-        axes[0, 1].set_title('RMSE')
-        axes[0, 1].set_xlabel('Epoch')
-        axes[0, 1].set_ylabel('RMSE')
-        axes[0, 1].legend()
-        axes[0, 1].grid(True, alpha=0.3)
-        
-        # Plot R²
-        axes[1, 0].plot(self.metrics_history['train_r2'], label='Train')
-        axes[1, 0].plot(self.metrics_history['val_r2'], label='Validation')
-        axes[1, 0].set_title('R²')
-        axes[1, 0].set_xlabel('Epoch')
-        axes[1, 0].set_ylabel('R²')
-        axes[1, 0].legend()
-        axes[1, 0].grid(True, alpha=0.3)
-        
-        # Plot RPD
-        axes[1, 1].plot(self.metrics_history['train_rpd'], label='Train')
-        axes[1, 1].plot(self.metrics_history['val_rpd'], label='Validation')
-        axes[1, 1].set_title('RPD (Ratio of Performance to Deviation)')
-        axes[1, 1].set_xlabel('Epoch')
-        axes[1, 1].set_ylabel('RPD')
-        axes[1, 1].legend()
-        axes[1, 1].grid(True, alpha=0.3)
-        
-        # Set a title for the entire figure
-        fig.suptitle(f'Fine-tuning Metrics (Epoch {epoch+1})', fontsize=16)
-        plt.tight_layout(rect=[0, 0, 1, 0.95])  # Adjust for the suptitle
-        
-        # Save the figure
-        filename = 'final_metrics.png' if is_final else f'metrics_epoch{epoch+1}.png'
-        plt.savefig(vis_dir / filename, dpi=150)
-        plt.close(fig)
-        
-        logging.info(f"Saved fine-tuning metrics visualization to {vis_dir / filename}")
